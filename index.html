@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>subsequence</title>
   <link rel="icon" type="image/svg+xml" href="branding/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     * {
       margin: 0;
@@ -15,8 +18,9 @@
     body {
       background: #0a0a0a;
       color: #ffffff;
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+      font-family: 'Archivo', sans-serif;
       min-height: 100vh;
+      user-select: none;
     }
 
     header {
@@ -73,8 +77,192 @@
       border-bottom: 1px solid #ffffff;
     }
 
+    .nav-right {
+      margin-left: auto;
+    }
+
     main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
       padding: 28px;
+    }
+
+    /* size select */
+    .size-select {
+      display: flex;
+      gap: 12px;
+      margin-top: 40vh;
+      transform: translateY(-50%);
+    }
+
+    .size-btn {
+      background: none;
+      border: 1px solid #333333;
+      color: #888888;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 10px 24px;
+      cursor: pointer;
+      letter-spacing: 0.03em;
+    }
+
+    .size-btn:hover {
+      color: #ffffff;
+      border-color: #ffffff;
+    }
+
+    /* hud */
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      width: 100%;
+      max-width: min(55vw, 55vh);
+      margin-bottom: 12px;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      color: #555555;
+    }
+
+    .hud-score { color: #ffffff; }
+    .hud-timer { color: #ffffff; }
+
+    /* grid */
+    .grid {
+      display: grid;
+      width: min(55vw, 55vh);
+      height: min(55vw, 55vh);
+      cursor: crosshair;
+    }
+
+    .cell {
+      background: #141414;
+      border: 1px solid #0a0a0a;
+      cursor: crosshair;
+    }
+
+    .cell.target {
+      background: #ffffff;
+    }
+
+    /* results */
+    .results {
+      margin-top: 30vh;
+      transform: translateY(-50%);
+      text-align: center;
+    }
+
+    .results-score {
+      font-size: 48px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .results-label {
+      font-size: 13px;
+      color: #555555;
+      letter-spacing: 0.05em;
+      margin-top: 4px;
+    }
+
+    .results-stats {
+      display: flex;
+      gap: 32px;
+      justify-content: center;
+      margin-top: 24px;
+      font-size: 14px;
+      color: #888888;
+    }
+
+    .results-stats span {
+      color: #ffffff;
+    }
+
+    .again-btn {
+      background: none;
+      border: 1px solid #333333;
+      color: #888888;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 8px 24px;
+      cursor: pointer;
+      letter-spacing: 0.03em;
+      margin-top: 32px;
+    }
+
+    .again-btn:hover {
+      color: #ffffff;
+      border-color: #ffffff;
+    }
+
+    /* settings */
+    .settings {
+      width: 100%;
+      max-width: 400px;
+      margin-top: 48px;
+    }
+
+    .settings-section {
+      margin-bottom: 32px;
+    }
+
+    .settings-label {
+      font-size: 13px;
+      color: #555555;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+
+    .sound-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .sound-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+
+    .sound-row:hover {
+      border-color: #333333;
+    }
+
+    .sound-row.selected {
+      border-color: #ffffff;
+    }
+
+    .sound-name {
+      font-size: 14px;
+      color: #888888;
+      flex: 1;
+    }
+
+    .sound-row.selected .sound-name {
+      color: #ffffff;
+    }
+
+    .sound-test {
+      background: none;
+      border: 1px solid #333333;
+      color: #555555;
+      font-family: inherit;
+      font-size: 11px;
+      padding: 4px 12px;
+      cursor: pointer;
+      letter-spacing: 0.03em;
+    }
+
+    .sound-test:hover {
+      color: #ffffff;
+      border-color: #ffffff;
     }
   </style>
 </head>
@@ -88,26 +276,242 @@
       <a href="#grid" data-tab="grid" class="active">grid</a>
       <a href="#keys" data-tab="keys">keys</a>
       <a href="#type" data-tab="type">type</a>
+      <a href="#settings" data-tab="settings" class="nav-right">settings</a>
     </nav>
   </header>
   <main id="content"></main>
 
   <script>
-    document.querySelectorAll('nav a').forEach(a => {
+    var content = document.getElementById('content');
+    var gameTimer = null;
+    var gameState = null;
+
+    // sounds
+    var sounds = [
+      { id: 'none', name: 'none' },
+      { id: 'click_1', name: 'click 1', file: 'sounds/click_1.wav' },
+      { id: 'click_2', name: 'click 2', file: 'sounds/click_2.wav' },
+      { id: 'click_3', name: 'click 3', file: 'sounds/click_3.wav' },
+      { id: 'click_4', name: 'click 4', file: 'sounds/click_4.wav' },
+      { id: 'click_5', name: 'click 5', file: 'sounds/click_5.wav' },
+      { id: 'click_6', name: 'click 6', file: 'sounds/click_6.wav' }
+    ];
+
+    var selectedSound = localStorage.getItem('subsequence_sound') || 'click_1';
+    var audioCache = {};
+
+    function preloadSounds() {
+      sounds.forEach(function(s) {
+        if (s.file) {
+          var a = new Audio(s.file);
+          a.preload = 'auto';
+          audioCache[s.id] = a;
+        }
+      });
+    }
+    preloadSounds();
+
+    function playHitSound() {
+      if (selectedSound === 'none') return;
+      var cached = audioCache[selectedSound];
+      if (!cached) return;
+      var clone = cached.cloneNode();
+      clone.volume = 1;
+      clone.play();
+    }
+
+    function setSound(id) {
+      selectedSound = id;
+      localStorage.setItem('subsequence_sound', id);
+    }
+
+    // nav
+    document.querySelectorAll('nav a').forEach(function(a) {
       a.addEventListener('click', function() {
         document.querySelector('nav a.active').classList.remove('active');
         this.classList.add('active');
+        showTab(this.dataset.tab);
       });
     });
 
-    var hash = window.location.hash.slice(1);
-    if (hash) {
-      var el = document.querySelector('nav a[data-tab="' + hash + '"]');
-      if (el) {
-        document.querySelector('nav a.active').classList.remove('active');
-        el.classList.add('active');
-      }
+    function showTab(tab) {
+      if (gameTimer) { clearInterval(gameTimer); gameTimer = null; }
+      if (tab === 'grid') showSizeSelect();
+      else if (tab === 'settings') showSettings();
+      else content.innerHTML = '';
     }
+
+    // size select
+    function showSizeSelect() {
+      content.innerHTML = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'size-select';
+      [3, 4, 6, 9, 12].forEach(function(n) {
+        var btn = document.createElement('button');
+        btn.className = 'size-btn';
+        btn.textContent = n + 'x' + n;
+        btn.addEventListener('click', function() { startGame(n); });
+        wrap.appendChild(btn);
+      });
+      content.appendChild(wrap);
+    }
+
+    // settings
+    function showSettings() {
+      content.innerHTML = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'settings';
+
+      var section = document.createElement('div');
+      section.className = 'settings-section';
+
+      var label = document.createElement('div');
+      label.className = 'settings-label';
+      label.textContent = 'hit sound';
+      section.appendChild(label);
+
+      var list = document.createElement('div');
+      list.className = 'sound-list';
+
+      sounds.forEach(function(s) {
+        var row = document.createElement('div');
+        row.className = 'sound-row' + (s.id === selectedSound ? ' selected' : '');
+
+        var name = document.createElement('div');
+        name.className = 'sound-name';
+        name.textContent = s.name;
+        row.appendChild(name);
+
+        if (s.file) {
+          var test = document.createElement('button');
+          test.className = 'sound-test';
+          test.textContent = 'test';
+          test.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var a = audioCache[s.id];
+            if (a) { var c = a.cloneNode(); c.volume = 1; c.play(); }
+          });
+          row.appendChild(test);
+        }
+
+        row.addEventListener('click', function() {
+          list.querySelectorAll('.sound-row').forEach(function(r) { r.classList.remove('selected'); });
+          row.classList.add('selected');
+          setSound(s.id);
+        });
+
+        list.appendChild(row);
+      });
+
+      section.appendChild(list);
+      wrap.appendChild(section);
+      content.appendChild(wrap);
+    }
+
+    // game
+    function startGame(size) {
+      gameState = { size: size, score: 0, misses: 0, timeLeft: 30, targets: new Set(), lastClicked: -1 };
+      content.innerHTML = '';
+
+      // hud
+      var hud = document.createElement('div');
+      hud.className = 'hud';
+      hud.innerHTML = '<div class="hud-score">0</div><div class="hud-timer">30s</div>';
+      content.appendChild(hud);
+
+      // grid
+      var grid = document.createElement('div');
+      grid.className = 'grid';
+      grid.style.gridTemplateColumns = 'repeat(' + size + ', 1fr)';
+      var total = size * size;
+      for (var i = 0; i < total; i++) {
+        var cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.dataset.index = i;
+        grid.appendChild(cell);
+      }
+      content.appendChild(grid);
+
+      // spawn initial targets
+      var numTargets = size <= 4 ? 3 : 4;
+      for (var t = 0; t < numTargets; t++) spawnTarget(grid);
+
+      // click handler — mousedown on each cell for fastest response
+      for (var c = 0; c < grid.children.length; c++) {
+        grid.children[c].addEventListener('mousedown', function(e) {
+          e.preventDefault();
+          if (this.classList.contains('target')) {
+            gameState.score++;
+            var clickedIdx = parseInt(this.dataset.index);
+            gameState.lastClicked = clickedIdx;
+            gameState.targets.delete(clickedIdx);
+            this.classList.remove('target');
+            spawnTarget(grid);
+            hud.querySelector('.hud-score').textContent = gameState.score;
+            playHitSound();
+          } else {
+            gameState.misses++;
+          }
+        });
+      }
+
+      // timer
+      gameTimer = setInterval(function() {
+        gameState.timeLeft--;
+        hud.querySelector('.hud-timer').textContent = gameState.timeLeft + 's';
+        if (gameState.timeLeft <= 0) {
+          clearInterval(gameTimer);
+          gameTimer = null;
+          endGame();
+        }
+      }, 1000);
+    }
+
+    function spawnTarget(grid) {
+      var total = gameState.size * gameState.size;
+      var available = [];
+      for (var i = 0; i < total; i++) {
+        if (!gameState.targets.has(i) && i !== gameState.lastClicked) available.push(i);
+      }
+      if (available.length === 0) return;
+      var idx = available[Math.floor(Math.random() * available.length)];
+      gameState.targets.add(idx);
+      grid.children[idx].classList.add('target');
+    }
+
+    function endGame() {
+      var total = gameState.score + gameState.misses;
+      var accuracy = total > 0 ? Math.round((gameState.score / total) * 100) : 0;
+      content.innerHTML = '';
+
+      var wrap = document.createElement('div');
+      wrap.className = 'results';
+      wrap.innerHTML =
+        '<div class="results-score">' + gameState.score + '</div>' +
+        '<div class="results-label">score</div>' +
+        '<div class="results-stats">' +
+          '<div>accuracy <span>' + accuracy + '%</span></div>' +
+          '<div>misses <span>' + gameState.misses + '</span></div>' +
+          '<div>grid <span>' + gameState.size + 'x' + gameState.size + '</span></div>' +
+        '</div>';
+
+      var btn = document.createElement('button');
+      btn.className = 'again-btn';
+      btn.textContent = 'play again';
+      btn.addEventListener('click', showSizeSelect);
+      wrap.appendChild(btn);
+
+      content.appendChild(wrap);
+    }
+
+    // init
+    var hash = window.location.hash.slice(1) || 'grid';
+    var el = document.querySelector('nav a[data-tab="' + hash + '"]');
+    if (el) {
+      document.querySelector('nav a.active').classList.remove('active');
+      el.classList.add('active');
+    }
+    showTab(hash);
   </script>
 </body>
 </html>
