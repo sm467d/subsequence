@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>subsequence</title>
+  <link rel="icon" type="image/svg+xml" href="branding/favicon.svg">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #0a0a0a;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      padding: 16px 28px;
+      gap: 32px;
+      border-bottom: 1px solid #1a1a1a;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .logo-text {
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      color: #ffffff;
+      opacity: 0.9;
+    }
+
+    .logo-icon {
+      width: 20px;
+      height: 20px;
+      opacity: 0.85;
+    }
+
+    nav {
+      display: flex;
+      gap: 6px;
+    }
+
+    nav a {
+      color: #555555;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      padding: 8px 20px;
+      cursor: pointer;
+    }
+
+    nav a:hover {
+      color: #999999;
+    }
+
+    nav a.active {
+      color: #ffffff;
+      border-bottom: 1px solid #ffffff;
+    }
+
+    main {
+      padding: 28px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/" class="logo">
+      <img src="branding/logo.svg" alt="subsequence" class="logo-icon">
+      <span class="logo-text">subsequence</span>
+    </a>
+    <nav>
+      <a href="#grid" data-tab="grid" class="active">grid</a>
+      <a href="#keys" data-tab="keys">keys</a>
+      <a href="#type" data-tab="type">type</a>
+    </nav>
+  </header>
+  <main id="content"></main>
+
+  <script>
+    document.querySelectorAll('nav a').forEach(a => {
+      a.addEventListener('click', function() {
+        document.querySelector('nav a.active').classList.remove('active');
+        this.classList.add('active');
+      });
+    });
+
+    var hash = window.location.hash.slice(1);
+    if (hash) {
+      var el = document.querySelector('nav a[data-tab="' + hash + '"]');
+      if (el) {
+        document.querySelector('nav a.active').classList.remove('active');
+        el.classList.add('active');
+      }
+    }
+  </script>
+</body>
+</html>
