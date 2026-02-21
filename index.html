@@ -346,7 +346,7 @@
       content.innerHTML = '';
       var wrap = document.createElement('div');
       wrap.className = 'size-select';
-      [3, 4, 6, 9, 12].forEach(function(n) {
+      [3, 4, 6, 9, 12, 24, 48].forEach(function(n) {
         var btn = document.createElement('button');
         btn.className = 'size-btn';
         btn.textContent = n + 'x' + n;
@@ -433,7 +433,7 @@
       content.appendChild(grid);
 
       // spawn initial targets
-      var numTargets = size <= 4 ? 3 : 4;
+      var numTargets = size <= 4 ? 3 : size >= 48 ? 6 : size >= 24 ? 5 : 4;
       for (var t = 0; t < numTargets; t++) spawnTarget(grid);
 
       // click handler — mousedown on each cell for fastest response
