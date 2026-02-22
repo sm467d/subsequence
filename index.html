@@ -416,6 +416,21 @@
       color: #ffffff;
       border-color: #ffffff;
     }
+
+    /* track */
+    .track-arena {
+      width: min(55vw, 55vh);
+      height: min(55vw, 55vh);
+      background: #141414;
+      position: relative;
+      cursor: crosshair;
+      overflow: hidden;
+    }
+
+    .track-target {
+      position: absolute;
+      background: #ffffff;
+    }
   </style>
 </head>
 <body>
@@ -426,6 +441,7 @@
     </a>
     <nav>
       <a href="#grid" data-tab="grid" class="active">grid</a>
+      <a href="#track" data-tab="track">track</a>
       <a href="#edit" data-tab="edit">edit</a>
       <a href="#settings" data-tab="settings" class="nav-right">settings</a>
     </nav>
@@ -448,6 +464,13 @@
     var selectedMode = localStorage.getItem('subsequence_mode') || 'time';
     var selectedDuration = parseInt(localStorage.getItem('subsequence_duration')) || 30;
     var selectedGrid = parseInt(localStorage.getItem('subsequence_grid')) || 9;
+
+    // track persisted
+    var selectedTrackDuration = parseInt(localStorage.getItem('subsequence_track_duration')) || 30;
+    var selectedTrackSize = localStorage.getItem('subsequence_track_size') || 'medium';
+    var selectedTrackDifficulty = localStorage.getItem('subsequence_track_difficulty') || 'normal';
+    var trackAnimFrame = null;
+    var trackSoundInterval = null;
 
     // sounds
     var sounds = [
@@ -626,7 +649,10 @@
 
     function showTab(tab) {
       if (gameTimer) { clearInterval(gameTimer); gameTimer = null; }
+      if (trackAnimFrame) { cancelAnimationFrame(trackAnimFrame); trackAnimFrame = null; }
+      if (trackSoundInterval) { clearInterval(trackSoundInterval); trackSoundInterval = null; }
       if (tab === 'grid') showModeSelect();
+      else if (tab === 'track') showTrackModeSelect();
       else if (tab === 'settings') showSettings();
       else content.innerHTML = '';
     }
@@ -777,6 +803,339 @@
 
       section.appendChild(list);
       wrap.appendChild(section);
+      content.appendChild(wrap);
+    }
+
+    // track mode select
+    function showTrackModeSelect() {
+      content.innerHTML = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'mode-select';
+
+      // row 1: duration
+      var row1 = document.createElement('div');
+      row1.className = 'mode-row';
+      var label1 = document.createElement('div');
+      label1.className = 'mode-row-label';
+      label1.textContent = 'time';
+      row1.appendChild(label1);
+      [{v: 30, l: '30s'}, {v: 60, l: '1m'}, {v: 180, l: '3m'}].forEach(function(d) {
+        var btn = document.createElement('button');
+        btn.className = 'mode-btn' + (d.v === selectedTrackDuration ? ' selected' : '');
+        btn.textContent = d.l;
+        btn.addEventListener('mousedown', function() {
+          selectedTrackDuration = d.v;
+          localStorage.setItem('subsequence_track_duration', d.v);
+          row1.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('selected'); });
+          btn.classList.add('selected');
+        });
+        row1.appendChild(btn);
+      });
+      wrap.appendChild(row1);
+
+      // row 2: target size
+      var row2 = document.createElement('div');
+      row2.className = 'mode-row';
+      var label2 = document.createElement('div');
+      label2.className = 'mode-row-label';
+      label2.textContent = 'target';
+      row2.appendChild(label2);
+      ['small', 'medium', 'large'].forEach(function(s) {
+        var btn = document.createElement('button');
+        btn.className = 'mode-btn' + (s === selectedTrackSize ? ' selected' : '');
+        btn.textContent = s;
+        btn.addEventListener('mousedown', function() {
+          selectedTrackSize = s;
+          localStorage.setItem('subsequence_track_size', s);
+          row2.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('selected'); });
+          btn.classList.add('selected');
+        });
+        row2.appendChild(btn);
+      });
+      wrap.appendChild(row2);
+
+      // row 3: difficulty
+      var row3 = document.createElement('div');
+      row3.className = 'mode-row';
+      var label3 = document.createElement('div');
+      label3.className = 'mode-row-label';
+      label3.textContent = 'difficulty';
+      row3.appendChild(label3);
+      ['easy', 'normal', 'hard'].forEach(function(d) {
+        var btn = document.createElement('button');
+        btn.className = 'mode-btn' + (d === selectedTrackDifficulty ? ' selected' : '');
+        btn.textContent = d;
+        btn.addEventListener('mousedown', function() {
+          selectedTrackDifficulty = d;
+          localStorage.setItem('subsequence_track_difficulty', d);
+          row3.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('selected'); });
+          btn.classList.add('selected');
+        });
+        row3.appendChild(btn);
+      });
+      wrap.appendChild(row3);
+
+      // start button
+      var cont = document.createElement('button');
+      cont.className = 'mode-btn';
+      cont.textContent = 'start';
+      cont.style.marginTop = '16px';
+      cont.addEventListener('mousedown', function() { startTrackGame(); });
+      wrap.appendChild(cont);
+
+      content.appendChild(wrap);
+    }
+
+    // track game
+    function startTrackGame() {
+      var duration = selectedTrackDuration;
+      var targetPx = selectedTrackSize === 'small' ? 20 : selectedTrackSize === 'large' ? 60 : 40;
+      // difficulty: controls speed + how often/sharply the target changes direction
+      var diffSettings = {
+        easy:   { speed: 180, changeChance: 0.005, nudgeRange: 0.3 },
+        normal: { speed: 250, changeChance: 0.02,  nudgeRange: 0.5 },
+        hard:   { speed: 320, changeChance: 0.06,  nudgeRange: 1.2 }
+      };
+      var diff = diffSettings[selectedTrackDifficulty] || diffSettings.normal;
+      var speed = diff.speed;
+
+      var trackState = {
+        duration: duration,
+        timeLeft: duration,
+        totalFrames: 0,
+        onTargetFrames: 0,
+        isOnTarget: false,
+        cursorX: -1,
+        cursorY: -1,
+        mouseDown: false
+      };
+
+      content.innerHTML = '';
+
+      // hud
+      var hud = document.createElement('div');
+      hud.className = 'hud';
+      var timeLabel = duration >= 60 ? Math.floor(duration / 60) + ':' + ('0' + (duration % 60)).slice(-2) : duration + 's';
+      hud.innerHTML = '<div class="hud-score">0%</div><div class="hud-mode">track</div><div class="hud-timer">' + timeLabel + '</div>';
+      content.appendChild(hud);
+
+      // arena
+      var arena = document.createElement('div');
+      arena.className = 'track-arena';
+      content.appendChild(arena);
+
+      // target
+      var target = document.createElement('div');
+      target.className = 'track-target';
+      target.style.width = targetPx + 'px';
+      target.style.height = targetPx + 'px';
+      arena.appendChild(target);
+
+      // initial position — center
+      var arenaRect = arena.getBoundingClientRect();
+      var arenaW = arenaRect.width;
+      var arenaH = arenaRect.height;
+      var tx = (arenaW - targetPx) / 2;
+      var ty = (arenaH - targetPx) / 2;
+      target.style.left = tx + 'px';
+      target.style.top = ty + 'px';
+
+      // random initial velocity
+      var angle = Math.random() * Math.PI * 2;
+      var vx = Math.cos(angle) * speed;
+      var vy = Math.sin(angle) * speed;
+
+      // track cursor
+      arena.addEventListener('mousemove', function(e) {
+        var r = arena.getBoundingClientRect();
+        trackState.cursorX = e.clientX - r.left;
+        trackState.cursorY = e.clientY - r.top;
+      });
+
+      arena.addEventListener('mouseleave', function() {
+        trackState.cursorX = -1;
+        trackState.cursorY = -1;
+      });
+
+      arena.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        trackState.mouseDown = true;
+      });
+
+      document.addEventListener('mouseup', function() {
+        trackState.mouseDown = false;
+      });
+
+      // sound interval — fires rapidly while on target
+      trackSoundInterval = null;
+
+      function startTrackSound() {
+        if (trackSoundInterval) return;
+        playHitSound();
+        trackSoundInterval = setInterval(playHitSound, 90);
+      }
+
+      function stopTrackSound() {
+        if (trackSoundInterval) {
+          clearInterval(trackSoundInterval);
+          trackSoundInterval = null;
+        }
+      }
+
+      // timer
+      gameTimer = setInterval(function() {
+        trackState.timeLeft--;
+        var tl = trackState.timeLeft;
+        var display = tl >= 60 ? Math.floor(tl / 60) + ':' + ('0' + (tl % 60)).slice(-2) : tl + 's';
+        hud.querySelector('.hud-timer').textContent = display;
+        if (trackState.timeLeft <= 0) {
+          clearInterval(gameTimer);
+          gameTimer = null;
+          cancelAnimationFrame(trackAnimFrame);
+          trackAnimFrame = null;
+          stopTrackSound();
+          endTrackGame(trackState);
+        }
+      }, 1000);
+
+      // game loop
+      var lastTime = performance.now();
+
+      function loop(now) {
+        var dt = (now - lastTime) / 1000;
+        lastTime = now;
+        if (dt > 0.1) dt = 0.1; // clamp big gaps
+
+        // move target
+        tx += vx * dt;
+        ty += vy * dt;
+
+        // bounce
+        if (tx <= 0) { tx = 0; vx = Math.abs(vx); }
+        if (ty <= 0) { ty = 0; vy = Math.abs(vy); }
+        if (tx >= arenaW - targetPx) { tx = arenaW - targetPx; vx = -Math.abs(vx); }
+        if (ty >= arenaH - targetPx) { ty = arenaH - targetPx; vy = -Math.abs(vy); }
+
+        // random direction change — frequency and sharpness scale with difficulty
+        if (Math.random() < diff.changeChance) {
+          var nudge = (Math.random() - 0.5) * diff.nudgeRange;
+          var currentAngle = Math.atan2(vy, vx) + nudge;
+          vx = Math.cos(currentAngle) * speed;
+          vy = Math.sin(currentAngle) * speed;
+        }
+
+        target.style.left = tx + 'px';
+        target.style.top = ty + 'px';
+
+        // hit detection
+        trackState.totalFrames++;
+        var cx = trackState.cursorX;
+        var cy = trackState.cursorY;
+        var onTarget = trackState.mouseDown && cx >= tx && cx <= tx + targetPx && cy >= ty && cy <= ty + targetPx;
+
+        if (onTarget) {
+          trackState.onTargetFrames++;
+          if (!trackState.isOnTarget) {
+            trackState.isOnTarget = true;
+            startTrackSound();
+          }
+        } else {
+          if (trackState.isOnTarget) {
+            trackState.isOnTarget = false;
+            stopTrackSound();
+          }
+        }
+
+        // update hud accuracy
+        var acc = trackState.totalFrames > 0 ? Math.round((trackState.onTargetFrames / trackState.totalFrames) * 100) : 0;
+        hud.querySelector('.hud-score').textContent = acc + '%';
+
+        trackAnimFrame = requestAnimationFrame(loop);
+      }
+
+      trackAnimFrame = requestAnimationFrame(loop);
+    }
+
+    async function saveTrackScore(trackState) {
+      if (!currentUser) return;
+      var accuracy = trackState.totalFrames > 0 ? Math.round((trackState.onTargetFrames / trackState.totalFrames) * 100) : 0;
+      var targetPx = selectedTrackSize === 'small' ? 20 : selectedTrackSize === 'large' ? 60 : 40;
+      var { error } = await sb.from('scores').insert({
+        user_id: currentUser.id,
+        mode: 'track',
+        grid_size: targetPx,
+        duration: trackState.duration,
+        score: accuracy,
+        accuracy: accuracy,
+        misses: 0,
+        difficulty: selectedTrackDifficulty
+      });
+      if (error) console.error('track save error:', error);
+    }
+
+    async function getTopTrackScores(trackState) {
+      if (!currentUser) return [];
+      var targetPx = selectedTrackSize === 'small' ? 20 : selectedTrackSize === 'large' ? 60 : 40;
+      var { data } = await sb.from('scores')
+        .select('score, accuracy, created_at')
+        .eq('user_id', currentUser.id)
+        .eq('mode', 'track')
+        .eq('grid_size', targetPx)
+        .eq('duration', trackState.duration)
+        .eq('difficulty', selectedTrackDifficulty)
+        .order('score', { ascending: false })
+        .limit(10);
+      return data || [];
+    }
+
+    async function endTrackGame(trackState) {
+      var accuracy = trackState.totalFrames > 0 ? Math.round((trackState.onTargetFrames / trackState.totalFrames) * 100) : 0;
+
+      await saveTrackScore(trackState);
+      var topScores = await getTopTrackScores(trackState);
+      var isNewBest = topScores.length > 0 && topScores[0].score === accuracy;
+
+      content.innerHTML = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'results';
+
+      var durLabel = trackState.duration >= 60 ? (trackState.duration / 60) + 'm' : trackState.duration + 's';
+      var statsHtml =
+        '<div>target <span>' + selectedTrackSize + '</span></div>' +
+        '<div>difficulty <span>' + selectedTrackDifficulty + '</span></div>' +
+        '<div>time <span>' + durLabel + '</span></div>';
+
+      wrap.innerHTML =
+        '<div class="results-score">' + accuracy + '%</div>' +
+        '<div class="results-label">accuracy</div>' +
+        (isNewBest ? '<div class="results-new-best">new personal best</div>' : '') +
+        '<div class="results-stats">' + statsHtml + '</div>';
+
+      var btn = document.createElement('button');
+      btn.className = 'again-btn';
+      btn.textContent = 'play again';
+      btn.addEventListener('click', showTrackModeSelect);
+      wrap.appendChild(btn);
+
+      if (topScores.length > 0) {
+        var hist = document.createElement('div');
+        hist.className = 'history';
+        hist.innerHTML = '<div class="history-title">your top 10</div>';
+        topScores.forEach(function(s, i) {
+          var d = new Date(s.created_at);
+          var dateStr = (d.getMonth() + 1) + '/' + d.getDate();
+          var row = document.createElement('div');
+          row.className = 'history-row';
+          row.innerHTML =
+            '<div class="history-rank">' + (i + 1) + '</div>' +
+            '<div class="history-score">' + s.score + '%</div>' +
+            '<div class="history-acc">' + s.accuracy + '%</div>' +
+            '<div class="history-date">' + dateStr + '</div>';
+          hist.appendChild(row);
+        });
+        wrap.appendChild(hist);
+      }
+
       content.appendChild(wrap);
     }
 
