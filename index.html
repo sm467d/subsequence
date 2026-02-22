@@ -249,6 +249,36 @@
       background: #ffffff;
     }
 
+    /* drag game */
+    .cell.drag-source {
+      background: #22c55e;
+      cursor: grab;
+    }
+
+    .cell.drag-source-dragging {
+      opacity: 0.3;
+    }
+
+    .cell.drag-target {
+      background: #ffffff;
+    }
+
+    .drag-ghost {
+      position: fixed;
+      background: #22c55e;
+      pointer-events: none;
+      z-index: 1000;
+      opacity: 0.85;
+    }
+
+    body.drag-track, body.drag-track * {
+      cursor: grab !important;
+    }
+
+    body.dragging, body.dragging * {
+      cursor: grabbing !important;
+    }
+
     /* results */
     .results {
       margin-top: 60px;
@@ -516,6 +546,7 @@
     </a>
     <nav>
       <a href="#grid" data-tab="grid" class="active">grid</a>
+      <a href="#drag" data-tab="drag">drag</a>
       <a href="#track" data-tab="track">track</a>
       <a href="#edit" data-tab="edit">edit</a>
       <a href="#settings" data-tab="settings" class="nav-right">settings</a>
@@ -534,6 +565,7 @@
     var content = document.getElementById('content');
     var gameTimer = null;
     var gameState = null;
+    var gameCleanup = null;
 
     // selected mode/duration/grid — persisted
     var selectedMode = localStorage.getItem('subsequence_mode') || 'time';
@@ -738,12 +770,15 @@
 
     function showTab(tab) {
       if (gameTimer) { clearInterval(gameTimer); gameTimer = null; }
+      if (gameCleanup) { gameCleanup(); gameCleanup = null; }
+      document.body.classList.remove('drag-track');
       if (trackAnimFrame) { cancelAnimationFrame(trackAnimFrame); trackAnimFrame = null; }
       if (trackSoundInterval) { clearInterval(trackSoundInterval); trackSoundInterval = null; }
       if (editTimer) { clearInterval(editTimer); editTimer = null; }
       document.removeEventListener('selectionchange', editSelectionHandler);
       editState = null;
-      if (tab === 'grid') showModeSelect();
+      if (tab === 'grid') showModeSelect('grid');
+      else if (tab === 'drag') showModeSelect('drag');
       else if (tab === 'track') showTrackModeSelect();
       else if (tab === 'edit') showEditModeSelect();
       else if (tab === 'settings') showSettings();
@@ -751,7 +786,7 @@
     }
 
     // mode select
-    function showModeSelect() {
+    function showModeSelect(track) {
       content.innerHTML = '';
       var wrap = document.createElement('div');
       wrap.className = 'mode-select';
@@ -841,7 +876,10 @@
       cont.className = 'mode-btn';
       cont.textContent = 'start — ' + selectedGrid + 'x' + selectedGrid;
       cont.style.marginTop = '16px';
-      cont.addEventListener('mousedown', function() { startGame(selectedGrid); });
+      cont.addEventListener('mousedown', function() {
+        if (track === 'drag') startDragGame(selectedGrid);
+        else startGame(selectedGrid);
+      });
       wrap.appendChild(cont);
 
       content.appendChild(wrap);
@@ -1238,7 +1276,7 @@
       var duration = mode === 'perfection' ? 0 : selectedDuration;
       gameState = {
         size: size, score: 0, misses: 0, timeLeft: duration,
-        targets: new Set(), lastClicked: -1, mode: mode, duration: duration
+        targets: new Set(), lastClicked: -1, mode: mode, duration: duration, track: 'grid'
       };
       content.innerHTML = '';
 
@@ -1327,6 +1365,7 @@
       var accuracy = total > 0 ? Math.round((gameState.score / total) * 100) : 0;
       var { error } = await sb.from('scores').insert({
         user_id: currentUser.id,
+        track: gameState.track || 'grid',
         mode: gameState.mode,
         grid_size: gameState.size,
         duration: gameState.duration,
@@ -1342,6 +1381,7 @@
       var query = sb.from('scores')
         .select('score, accuracy, misses, created_at')
         .eq('user_id', currentUser.id)
+        .eq('track', gameState.track || 'grid')
         .eq('mode', gameState.mode)
         .eq('grid_size', gameState.size);
 
@@ -1388,7 +1428,7 @@
       var btn = document.createElement('button');
       btn.className = 'again-btn';
       btn.textContent = 'play again';
-      btn.addEventListener('click', showModeSelect);
+      btn.addEventListener('click', function() { showModeSelect(gameState.track || 'grid'); });
       wrap.appendChild(btn);
 
       if (topScores.length > 0) {
@@ -1865,6 +1905,160 @@
       wrap.appendChild(cont);
 
       content.appendChild(wrap);
+    }
+
+    // drag game
+    function startDragGame(size) {
+      var mode = selectedMode;
+      var duration = mode === 'perfection' ? 0 : selectedDuration;
+      gameState = {
+        size: size, score: 0, misses: 0, timeLeft: duration,
+        mode: mode, duration: duration, track: 'drag',
+        sourceIdx: -1, targetIdx: -1
+      };
+      content.innerHTML = '';
+
+      // hud
+      var hud = document.createElement('div');
+      hud.className = 'hud';
+      if (mode === 'perfection') {
+        hud.innerHTML = '<div class="hud-score">0</div><div class="hud-mode">perfection</div><div class="hud-timer"></div>';
+      } else {
+        var timeLabel = duration >= 60 ? Math.floor(duration / 60) + ':' + ('0' + (duration % 60)).slice(-2) : duration + 's';
+        hud.innerHTML = '<div class="hud-score">0</div><div class="hud-mode">' + mode + '</div><div class="hud-timer">' + timeLabel + '</div>';
+      }
+      content.appendChild(hud);
+
+      // grid
+      var grid = document.createElement('div');
+      grid.className = 'grid';
+      grid.style.gridTemplateColumns = 'repeat(' + size + ', 1fr)';
+      grid.style.cursor = 'default';
+      var total = size * size;
+      for (var i = 0; i < total; i++) {
+        var cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.dataset.index = i;
+        cell.style.cursor = 'default';
+        grid.appendChild(cell);
+      }
+      content.appendChild(grid);
+
+      // spawn first pair
+      document.body.classList.add('drag-track');
+      spawnDragPair(grid);
+
+      // drag state
+      var dragGhost = null;
+      var dragOffsetX = 0, dragOffsetY = 0;
+      var isDragging = false;
+
+      grid.addEventListener('mousedown', function(e) {
+        var cell = e.target;
+        if (!cell.classList.contains('drag-source')) return;
+        isDragging = true;
+        var rect = cell.getBoundingClientRect();
+        dragOffsetX = e.clientX - rect.left;
+        dragOffsetY = e.clientY - rect.top;
+
+        dragGhost = document.createElement('div');
+        dragGhost.className = 'drag-ghost';
+        dragGhost.style.width = rect.width + 'px';
+        dragGhost.style.height = rect.height + 'px';
+        dragGhost.style.left = (e.clientX - dragOffsetX) + 'px';
+        dragGhost.style.top = (e.clientY - dragOffsetY) + 'px';
+        document.body.appendChild(dragGhost);
+
+        cell.classList.add('drag-source-dragging');
+        document.body.classList.add('dragging');
+        e.preventDefault();
+      });
+
+      function dragMoveHandler(e) {
+        if (!isDragging || !dragGhost) return;
+        dragGhost.style.left = (e.clientX - dragOffsetX) + 'px';
+        dragGhost.style.top = (e.clientY - dragOffsetY) + 'px';
+      }
+
+      function dragUpHandler(e) {
+        if (!isDragging) return;
+        isDragging = false;
+        document.body.classList.remove('dragging');
+
+        if (dragGhost) { dragGhost.remove(); dragGhost = null; }
+
+        var sourceCell = grid.querySelector('.drag-source');
+        if (sourceCell) sourceCell.classList.remove('drag-source-dragging');
+
+        var dropTarget = document.elementFromPoint(e.clientX, e.clientY);
+        if (dropTarget && dropTarget.classList.contains('drag-target')) {
+          // hit
+          gameState.score++;
+          hud.querySelector('.hud-score').textContent = gameState.score;
+          playHitSound();
+          clearDragPair(grid);
+          spawnDragPair(grid);
+        } else if (dropTarget && dropTarget.classList.contains('cell') && !dropTarget.classList.contains('drag-source')) {
+          // miss — dropped on wrong cell
+          gameState.misses++;
+          if (gameState.mode === 'perfection') {
+            cleanup();
+            endGame();
+          }
+        }
+        // dropped on source or outside grid = cancel, no penalty
+      }
+
+      document.addEventListener('mousemove', dragMoveHandler);
+      document.addEventListener('mouseup', dragUpHandler);
+
+      function cleanup() {
+        document.removeEventListener('mousemove', dragMoveHandler);
+        document.removeEventListener('mouseup', dragUpHandler);
+        document.body.classList.remove('dragging', 'drag-track');
+        if (dragGhost) { dragGhost.remove(); dragGhost = null; }
+      }
+
+      gameCleanup = cleanup;
+
+      // timer
+      if (mode === 'time') {
+        gameTimer = setInterval(function() {
+          gameState.timeLeft--;
+          var tl = gameState.timeLeft;
+          var display = tl >= 60 ? Math.floor(tl / 60) + ':' + ('0' + (tl % 60)).slice(-2) : tl + 's';
+          hud.querySelector('.hud-timer').textContent = display;
+          if (gameState.timeLeft <= 0) {
+            clearInterval(gameTimer);
+            gameTimer = null;
+            cleanup();
+            endGame();
+          }
+        }, 1000);
+      }
+    }
+
+    function spawnDragPair(grid) {
+      var total = gameState.size * gameState.size;
+      var available = [];
+      for (var i = 0; i < total; i++) available.push(i);
+
+      var srcIdx = available[Math.floor(Math.random() * available.length)];
+      available.splice(available.indexOf(srcIdx), 1);
+      var tgtIdx = available[Math.floor(Math.random() * available.length)];
+
+      gameState.sourceIdx = srcIdx;
+      gameState.targetIdx = tgtIdx;
+
+      grid.children[srcIdx].classList.add('drag-source');
+      grid.children[tgtIdx].classList.add('drag-target');
+    }
+
+    function clearDragPair(grid) {
+      if (gameState.sourceIdx >= 0) grid.children[gameState.sourceIdx].classList.remove('drag-source', 'drag-source-dragging');
+      if (gameState.targetIdx >= 0) grid.children[gameState.targetIdx].classList.remove('drag-target');
+      gameState.sourceIdx = -1;
+      gameState.targetIdx = -1;
     }
 
     // init
