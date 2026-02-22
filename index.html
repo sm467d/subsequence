@@ -431,6 +431,81 @@
       position: absolute;
       background: #ffffff;
     }
+
+    /* edit track */
+    .edit-editor {
+      width: min(55vw, 55vh);
+      min-height: 200px;
+      background: #141414;
+      border: 1px solid #333333;
+      color: #ffffff;
+      font-family: 'Archivo', monospace;
+      font-size: 15px;
+      line-height: 1.7;
+      padding: 20px 24px;
+      outline: none;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      caret-color: #ffffff;
+      letter-spacing: 0.01em;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .edit-caret-target {
+      position: relative;
+    }
+
+    .edit-caret-target::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: #3b82f6;
+      animation: edit-blink 1s step-end infinite;
+    }
+
+    @keyframes edit-blink {
+      50% { opacity: 0; }
+    }
+
+    .edit-hl-select {
+      background: rgba(234, 179, 8, 0.25);
+    }
+
+    .edit-hl-delete {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    .edit-hl-replace-src {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    .edit-hl-replace-dst {
+      position: relative;
+      background: rgba(34, 197, 94, 0.25);
+    }
+
+    .edit-hl-replace-dst::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: #22c55e;
+    }
+
+    .edit-hint {
+      width: min(55vw, 55vh);
+      font-size: 12px;
+      color: #333333;
+      letter-spacing: 0.04em;
+      margin-top: 8px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -471,6 +546,20 @@
     var selectedTrackDifficulty = localStorage.getItem('subsequence_track_difficulty') || 'normal';
     var trackAnimFrame = null;
     var trackSoundInterval = null;
+
+    // edit track state
+    var editState = null;
+    var editTimer = null;
+    var selectedEditDrills = JSON.parse(localStorage.getItem('subsequence_edit_drills') || '["movement","selection","deletion","replace"]');
+    var selectedEditDuration = parseInt(localStorage.getItem('subsequence_edit_duration')) || 30;
+
+    var editTextBlocks = [
+      "The quick brown fox jumps over the lazy dog near the riverbank. Every morning the fox would wake up and stretch before heading out to find breakfast. The dog never seemed to mind the fox running past. They had developed an understanding over the years. Sometimes the fox would bring back a small fish from the river and leave it near the sleeping dog as a quiet gesture of friendship.",
+      "Software engineers often spend more time reading code than writing it. Understanding existing patterns in a codebase is essential before making changes. A good developer reads the test suite first to understand expected behavior. Then they trace through the implementation to find the right place to make modifications. Only after this exploration do they begin writing new code.",
+      "The city lights reflected off the wet pavement as rain continued to fall. People hurried along the sidewalks with umbrellas and jackets pulled tight. A musician played guitar under the awning of a bookstore. The melody drifted through the rain and mixed with the sound of passing cars. A few people stopped to listen before continuing on their way home through the evening.",
+      "Learning to type efficiently is only the first step in computer productivity. The real gains come from mastering text navigation and manipulation shortcuts. Moving by words instead of characters saves hundreds of keystrokes per day. Selecting entire lines with a single command eliminates tedious click and drag operations. These small improvements compound into significant time savings over months and years.",
+      "The research team published their findings after three years of careful study. Their data showed a clear correlation between practice frequency and skill improvement. Participants who trained for short sessions daily outperformed those who trained in long weekly sessions. The key factor was consistency rather than total time invested. Regular practice built stronger neural pathways than occasional intensive effort."
+    ];
 
     // sounds
     var sounds = [
@@ -651,8 +740,12 @@
       if (gameTimer) { clearInterval(gameTimer); gameTimer = null; }
       if (trackAnimFrame) { cancelAnimationFrame(trackAnimFrame); trackAnimFrame = null; }
       if (trackSoundInterval) { clearInterval(trackSoundInterval); trackSoundInterval = null; }
+      if (editTimer) { clearInterval(editTimer); editTimer = null; }
+      document.removeEventListener('selectionchange', editSelectionHandler);
+      editState = null;
       if (tab === 'grid') showModeSelect();
       else if (tab === 'track') showTrackModeSelect();
+      else if (tab === 'edit') showEditModeSelect();
       else if (tab === 'settings') showSettings();
       else content.innerHTML = '';
     }
@@ -1316,6 +1409,460 @@
         });
         wrap.appendChild(hist);
       }
+
+      content.appendChild(wrap);
+    }
+
+    // ── edit track ──
+
+    function getTextOffset(container, node, offset) {
+      var range = document.createRange();
+      range.selectNodeContents(container);
+      range.setEnd(node, offset);
+      return range.toString().length;
+    }
+
+    function setCursorAtOffset(container, offset) {
+      var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+      var pos = 0;
+      var node;
+      while (node = walker.nextNode()) {
+        var len = node.textContent.length;
+        if (pos + len >= offset) {
+          var sel = window.getSelection();
+          var range = document.createRange();
+          range.setStart(node, offset - pos);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          return;
+        }
+        pos += len;
+      }
+    }
+
+    function placeCursorAtEnd(container) {
+      var sel = window.getSelection();
+      var range = document.createRange();
+      range.selectNodeContents(container);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    function findWordBoundary(text, pos, direction) {
+      if (direction === -1) {
+        while (pos > 0 && text[pos - 1] !== ' ') pos--;
+        return pos;
+      } else {
+        while (pos < text.length && text[pos] !== ' ') pos++;
+        return pos;
+      }
+    }
+
+    function pickRandomWordRange(text, minLen, maxLen) {
+      var attempts = 0;
+      while (attempts < 50) {
+        var pos = Math.floor(Math.random() * (text.length - minLen));
+        var start = findWordBoundary(text, pos, -1);
+        var end = findWordBoundary(text, start + minLen, 1);
+        var len = end - start;
+        if (len >= minLen && len <= maxLen && start >= 0 && end <= text.length) {
+          return { start: start, end: end };
+        }
+        attempts++;
+      }
+      var s = 0;
+      var e = findWordBoundary(text, minLen, 1);
+      return { start: s, end: Math.min(e, text.length) };
+    }
+
+    function renderEditText(highlights) {
+      var text = editState.textContent;
+      var editor = editState.editorEl;
+
+      // save cursor offset before re-rendering
+      var savedOffset = -1;
+      var sel = window.getSelection();
+      if (sel.rangeCount > 0 && editor.contains(sel.anchorNode)) {
+        savedOffset = getTextOffset(editor, sel.anchorNode, sel.anchorOffset);
+      }
+
+      while (editor.firstChild) editor.removeChild(editor.firstChild);
+      highlights.sort(function(a, b) { return a.start - b.start; });
+      var pos = 0;
+      highlights.forEach(function(hl) {
+        if (hl.start > pos) {
+          editor.appendChild(document.createTextNode(text.slice(pos, hl.start)));
+        }
+        var span = document.createElement('span');
+        span.className = hl.className;
+        span.textContent = text.slice(hl.start, hl.end);
+        editor.appendChild(span);
+        pos = hl.end;
+      });
+      if (pos < text.length) {
+        editor.appendChild(document.createTextNode(text.slice(pos)));
+      }
+
+      // restore cursor position
+      if (savedOffset >= 0) {
+        savedOffset = Math.min(savedOffset, text.length);
+        setCursorAtOffset(editor, savedOffset);
+      }
+    }
+
+    function editSelectionHandler() {
+      if (!editState || !editState.currentDrill) return;
+      var type = editState.currentDrill.type;
+      if (type === 'movement' || type === 'selection') {
+        checkEditDrill();
+      }
+    }
+
+    function loadEditText() {
+      var idx;
+      do {
+        idx = Math.floor(Math.random() * editTextBlocks.length);
+      } while (idx === editState.originalTextIndex && editTextBlocks.length > 1);
+      editState.originalTextIndex = idx;
+      editState.textContent = editTextBlocks[idx];
+      editState.editorEl.textContent = editState.textContent;
+    }
+
+    function generateEditDrill() {
+      var text = editState.textContent;
+      if (text.length < 50) {
+        loadEditText();
+        text = editState.textContent;
+      }
+
+      var drills = editState.enabledDrills;
+      var type = drills[Math.floor(Math.random() * drills.length)];
+      var drill;
+
+      if (type === 'movement') {
+        var targetOffset = Math.floor(Math.random() * text.length);
+        drill = { type: 'movement', targetOffset: targetOffset };
+        var highlights = [];
+        if (targetOffset < text.length) {
+          highlights.push({ start: targetOffset, end: targetOffset + 1, className: 'edit-caret-target' });
+        }
+        renderEditText(highlights);
+        editState.hintEl.textContent = 'move';
+
+      } else if (type === 'selection') {
+        var range = pickRandomWordRange(text, 4, 30);
+        drill = { type: 'selection', targetStart: range.start, targetEnd: range.end };
+        renderEditText([{ start: range.start, end: range.end, className: 'edit-hl-select' }]);
+        editState.hintEl.textContent = 'select';
+
+      } else if (type === 'deletion') {
+        var range = pickRandomWordRange(text, 4, 25);
+        var expected = text.slice(0, range.start) + text.slice(range.end);
+        drill = { type: 'deletion', targetStart: range.start, targetEnd: range.end, expectedText: expected };
+        renderEditText([{ start: range.start, end: range.end, className: 'edit-hl-delete' }]);
+        editState.hintEl.textContent = 'delete';
+
+      } else if (type === 'replace') {
+        // pick a single word
+        var words = [];
+        var wi = 0;
+        while (wi < text.length) {
+          if (text[wi] === ' ') { wi++; continue; }
+          var ws = wi;
+          while (wi < text.length && text[wi] !== ' ') wi++;
+          if (wi - ws >= 3) words.push({ start: ws, end: wi });
+        }
+        var picked = words[Math.floor(Math.random() * words.length)];
+        var srcRange = { start: picked.start, end: picked.end };
+        var srcText = text.slice(srcRange.start, srcRange.end);
+        var dstOffset;
+        var attempts = 0;
+        do {
+          dstOffset = Math.floor(Math.random() * text.length);
+          attempts++;
+        } while (Math.abs(dstOffset - srcRange.start) < 20 && attempts < 50);
+        // ensure dst is at a word boundary
+        dstOffset = findWordBoundary(text, dstOffset, -1);
+
+        var afterRemove = text.slice(0, srcRange.start) + text.slice(srcRange.end);
+        var adjustedDst = dstOffset > srcRange.end ? dstOffset - (srcRange.end - srcRange.start) : dstOffset;
+        adjustedDst = Math.max(0, Math.min(adjustedDst, afterRemove.length));
+        var expected = afterRemove.slice(0, adjustedDst) + srcText + afterRemove.slice(adjustedDst);
+        drill = {
+          type: 'replace', srcStart: srcRange.start, srcEnd: srcRange.end,
+          dstOffset: dstOffset, expectedText: expected
+        };
+
+        var highlights = [
+          { start: srcRange.start, end: srcRange.end, className: 'edit-hl-replace-src' }
+        ];
+        if (dstOffset < text.length) {
+          highlights.push({ start: dstOffset, end: dstOffset + 1, className: 'edit-hl-replace-dst' });
+        }
+        // avoid overlapping highlights
+        if (highlights.length === 2 && highlights[0].start <= highlights[1].end && highlights[1].start <= highlights[0].end) {
+          highlights.pop();
+        }
+        renderEditText(highlights);
+        editState.hintEl.textContent = 'replace';
+      }
+
+      editState.currentDrill = drill;
+    }
+
+    function checkEditDrill() {
+      if (!editState || !editState.currentDrill) return;
+      var drill = editState.currentDrill;
+      var editor = editState.editorEl;
+      var completed = false;
+
+      if (drill.type === 'movement') {
+        var sel = window.getSelection();
+        if (sel.isCollapsed && sel.rangeCount > 0) {
+          var cursorOffset = getTextOffset(editor, sel.anchorNode, sel.anchorOffset);
+          if (cursorOffset === drill.targetOffset) {
+            completed = true;
+          }
+        }
+
+      } else if (drill.type === 'selection') {
+        var sel = window.getSelection();
+        if (!sel.isCollapsed && sel.rangeCount > 0) {
+          var range = sel.getRangeAt(0);
+          var selStart = getTextOffset(editor, range.startContainer, range.startOffset);
+          var selEnd = getTextOffset(editor, range.endContainer, range.endOffset);
+          if (selStart === drill.targetStart && selEnd === drill.targetEnd) {
+            completed = true;
+          }
+        }
+
+      } else if (drill.type === 'deletion') {
+        var currentText = editor.textContent;
+        if (currentText === drill.expectedText) {
+          completed = true;
+          editState.textContent = currentText;
+        }
+
+      } else if (drill.type === 'replace') {
+        var currentText = editor.textContent;
+        if (currentText === drill.expectedText) {
+          completed = true;
+          editState.textContent = currentText;
+        }
+      }
+
+      if (completed) {
+        editState.drillsCompleted++;
+        editState.hudScoreEl.textContent = editState.drillsCompleted;
+        playHitSound();
+        editState.currentDrill = null;
+        setTimeout(function() {
+          if (editState) generateEditDrill();
+        }, 150);
+      }
+    }
+
+    function startEditGame() {
+      editState = {
+        drillsCompleted: 0,
+        keystrokes: 0,
+        timeLeft: selectedEditDuration,
+        duration: selectedEditDuration,
+        enabledDrills: selectedEditDrills.slice(),
+        currentDrill: null,
+        textContent: '',
+        originalTextIndex: -1,
+        editorEl: null,
+        hudScoreEl: null,
+        hudTimerEl: null,
+        hintEl: null
+      };
+
+      content.innerHTML = '';
+
+      // hud
+      var hud = document.createElement('div');
+      hud.className = 'hud';
+      var hudScore = document.createElement('div');
+      hudScore.className = 'hud-score';
+      hudScore.textContent = '0';
+      var hudMode = document.createElement('div');
+      hudMode.className = 'hud-mode';
+      hudMode.textContent = 'edit';
+      var hudTimer = document.createElement('div');
+      hudTimer.className = 'hud-timer';
+      var timeLabel = selectedEditDuration >= 60
+        ? Math.floor(selectedEditDuration / 60) + ':' + ('0' + (selectedEditDuration % 60)).slice(-2)
+        : selectedEditDuration + 's';
+      hudTimer.textContent = timeLabel;
+      hud.appendChild(hudScore);
+      hud.appendChild(hudMode);
+      hud.appendChild(hudTimer);
+      content.appendChild(hud);
+      editState.hudScoreEl = hudScore;
+      editState.hudTimerEl = hudTimer;
+
+      // editor
+      var editor = document.createElement('div');
+      editor.className = 'edit-editor';
+      editor.contentEditable = 'true';
+      editor.spellcheck = false;
+      editor.setAttribute('autocapitalize', 'off');
+      editor.setAttribute('autocomplete', 'off');
+      editor.setAttribute('autocorrect', 'off');
+      content.appendChild(editor);
+      editState.editorEl = editor;
+
+      // hint
+      var hint = document.createElement('div');
+      hint.className = 'edit-hint';
+      content.appendChild(hint);
+      editState.hintEl = hint;
+
+      // prevent formatting
+      editor.addEventListener('paste', function(e) {
+        e.preventDefault();
+        var text = (e.clipboardData || window.clipboardData).getData('text/plain');
+        document.execCommand('insertText', false, text);
+        editState.keystrokes++;
+        checkEditDrill();
+      });
+
+      editor.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); return; }
+        if ((e.metaKey || e.ctrlKey) && ['b', 'i', 'u'].indexOf(e.key.toLowerCase()) !== -1) {
+          e.preventDefault();
+          return;
+        }
+        if (['Shift', 'Meta', 'Alt', 'Control', 'CapsLock'].indexOf(e.key) === -1) {
+          editState.keystrokes++;
+        }
+      });
+
+      editor.addEventListener('input', function() {
+        checkEditDrill();
+      });
+
+      document.addEventListener('selectionchange', editSelectionHandler);
+
+      loadEditText();
+      generateEditDrill();
+      setTimeout(function() {
+        editor.focus();
+      }, 50);
+
+      // timer
+      editTimer = setInterval(function() {
+        editState.timeLeft--;
+        var tl = editState.timeLeft;
+        var display = tl >= 60 ? Math.floor(tl / 60) + ':' + ('0' + (tl % 60)).slice(-2) : tl + 's';
+        editState.hudTimerEl.textContent = display;
+        if (editState.timeLeft <= 0) {
+          clearInterval(editTimer);
+          editTimer = null;
+          endEditGame();
+        }
+      }, 1000);
+    }
+
+    function endEditGame() {
+      document.removeEventListener('selectionchange', editSelectionHandler);
+      if (editTimer) { clearInterval(editTimer); editTimer = null; }
+
+      var drills = editState.drillsCompleted;
+      var keystrokes = editState.keystrokes;
+      var duration = editState.duration;
+      var drillsPerMinute = duration > 0 ? Math.round((drills / duration) * 60 * 10) / 10 : 0;
+
+      content.innerHTML = '';
+
+      var wrap = document.createElement('div');
+      wrap.className = 'results';
+
+      var statsHtml =
+        '<div>rate <span>' + drillsPerMinute + '/min</span></div>' +
+        '<div>keystrokes <span>' + keystrokes + '</span></div>' +
+        '<div>time <span>' + (duration >= 60 ? (duration / 60) + 'm' : duration + 's') + '</span></div>' +
+        '<div>drills <span>' + editState.enabledDrills.join(', ') + '</span></div>';
+
+      wrap.innerHTML =
+        '<div class="results-score">' + drills + '</div>' +
+        '<div class="results-label">drills completed</div>' +
+        '<div class="results-stats">' + statsHtml + '</div>';
+
+      var btn = document.createElement('button');
+      btn.className = 'again-btn';
+      btn.textContent = 'play again';
+      btn.addEventListener('click', showEditModeSelect);
+      wrap.appendChild(btn);
+
+      content.appendChild(wrap);
+      editState = null;
+    }
+
+    function showEditModeSelect() {
+      content.innerHTML = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'mode-select';
+
+      // row 1: drill type toggles (multi-select)
+      var row1 = document.createElement('div');
+      row1.className = 'mode-row';
+      var label1 = document.createElement('div');
+      label1.className = 'mode-row-label';
+      label1.textContent = 'drills';
+      row1.appendChild(label1);
+
+      ['movement', 'selection', 'deletion', 'replace'].forEach(function(drill) {
+        var btn = document.createElement('button');
+        btn.className = 'mode-btn' + (selectedEditDrills.indexOf(drill) !== -1 ? ' selected' : '');
+        btn.textContent = drill;
+        btn.addEventListener('mousedown', function() {
+          var idx = selectedEditDrills.indexOf(drill);
+          if (idx !== -1) {
+            if (selectedEditDrills.length <= 1) return;
+            selectedEditDrills.splice(idx, 1);
+            btn.classList.remove('selected');
+          } else {
+            selectedEditDrills.push(drill);
+            btn.classList.add('selected');
+          }
+          localStorage.setItem('subsequence_edit_drills', JSON.stringify(selectedEditDrills));
+        });
+        row1.appendChild(btn);
+      });
+      wrap.appendChild(row1);
+
+      // row 2: duration
+      var row2 = document.createElement('div');
+      row2.className = 'mode-row';
+      var label2 = document.createElement('div');
+      label2.className = 'mode-row-label';
+      label2.textContent = 'time';
+      row2.appendChild(label2);
+      [{v: 30, l: '30s'}, {v: 60, l: '1m'}, {v: 180, l: '3m'}].forEach(function(d) {
+        var btn = document.createElement('button');
+        btn.className = 'mode-btn' + (d.v === selectedEditDuration ? ' selected' : '');
+        btn.textContent = d.l;
+        btn.addEventListener('mousedown', function() {
+          selectedEditDuration = d.v;
+          localStorage.setItem('subsequence_edit_duration', d.v);
+          row2.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('selected'); });
+          btn.classList.add('selected');
+        });
+        row2.appendChild(btn);
+      });
+      wrap.appendChild(row2);
+
+      // start button
+      var cont = document.createElement('button');
+      cont.className = 'mode-btn';
+      cont.textContent = 'start';
+      cont.style.marginTop = '16px';
+      cont.addEventListener('mousedown', function() { startEditGame(); });
+      wrap.appendChild(cont);
 
       content.appendChild(wrap);
     }
